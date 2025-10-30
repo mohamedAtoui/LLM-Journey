@@ -1,5 +1,14 @@
 """
 Utilities for training, evaluation, logging, and visualization
+
+Based on "Attention Is All You Need" (Vaswani et al., 2017)
+Includes utilities from Harvard NLP's Annotated Transformer:
+https://nlp.seas.harvard.edu/annotated-transformer/
+
+Reference:
+    Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N.,
+    Kaiser, Ł., & Polosukhin, I. (2017). Attention is all you need. In Advances
+    in neural information processing systems (pp. 5998-6008).
 """
 
 import torch
@@ -10,7 +19,83 @@ import seaborn as sns
 from torch.utils.tensorboard import SummaryWriter
 import os
 import json
+import math
 from pathlib import Path
+
+# Import mask utilities for convenience
+from .attention import subsequent_mask
+
+
+def rate(step, model_size, factor, warmup):
+    """
+    Learning rate schedule from "Attention is All You Need" (Harvard NLP)
+
+    Implements the learning rate schedule from the paper:
+    lrate = d_model^(-0.5) * min(step^(-0.5), step * warmup^(-1.5))
+
+    This corresponds to increasing the learning rate linearly for the first
+    warmup steps, and decreasing it thereafter proportionally to the inverse
+    square root of the step number.
+
+    Args:
+        step: Current training step (1-indexed)
+        model_size: Model dimension (d_model)
+        factor: Scaling factor for learning rate
+        warmup: Number of warmup steps
+
+    Returns:
+        float: Learning rate for this step
+
+    Example:
+        >>> # Get LR for step 4000 with d_model=512, warmup=4000
+        >>> lr = rate(4000, 512, 1.0, 4000)
+        >>> # Returns: 512^-0.5 * min(4000^-0.5, 4000 * 4000^-1.5) ≈ 0.000088
+    """
+    if step == 0:
+        step = 1
+    return factor * (
+        model_size ** (-0.5) * min(step ** (-0.5), step * warmup ** (-1.5))
+    )
+
+
+class Batch:
+    """
+    Batch object for training (Harvard NLP implementation)
+
+    Holds a batch of data with src and tgt sentences, along with constructing
+    the masks for training.
+
+    Args:
+        src: Source sequence tensor (batch, src_len)
+        tgt: Target sequence tensor (batch, tgt_len) [optional]
+        pad: Padding token ID (default: 2)
+
+    Attributes:
+        src: Source sequences
+        src_mask: Mask for source (hides padding)
+        tgt: Target sequences (input to decoder, excludes last token)
+        tgt_y: Target sequences (labels, excludes first token)
+        tgt_mask: Mask for target (hides padding and future tokens)
+        ntokens: Number of target tokens (excluding padding)
+    """
+
+    def __init__(self, src, tgt=None, pad=2):
+        self.src = src
+        self.src_mask = (src != pad).unsqueeze(-2)
+        if tgt is not None:
+            self.tgt = tgt[:, :-1]
+            self.tgt_y = tgt[:, 1:]
+            self.tgt_mask = self.make_std_mask(self.tgt, pad)
+            self.ntokens = (self.tgt_y != pad).data.sum()
+
+    @staticmethod
+    def make_std_mask(tgt, pad):
+        """Create a mask to hide padding and future words"""
+        tgt_mask = (tgt != pad).unsqueeze(-2)
+        tgt_mask = tgt_mask & subsequent_mask(tgt.size(-1)).type_as(
+            tgt_mask.data
+        )
+        return tgt_mask
 
 
 class MetricsTracker:

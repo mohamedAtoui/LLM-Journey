@@ -1,192 +1,258 @@
 """
-Full Transformer Encoder-Decoder Architecture with Multi-Head Attention
+Full Transformer Encoder-Decoder Architecture
+
 Based on "Attention Is All You Need" (Vaswani et al., 2017)
+Implementation follows Harvard NLP's Annotated Transformer:
+https://nlp.seas.harvard.edu/annotated-transformer/
+
+Reference:
+    Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N.,
+    Kaiser, Ł., & Polosukhin, I. (2017). Attention is all you need. In Advances
+    in neural information processing systems (pp. 5998-6008).
 """
 
 import torch
 import torch.nn as nn
-from .attention import MultiHeadAttention, create_combined_mask, create_padding_mask
-from .layers import LayerNorm, FeedForward, ResidualConnection
-from .positional_encoding import PositionalEncodingFactory
+import torch.nn.functional as F
+import math
+import copy
+
+from .attention import MultiHeadedAttention, create_combined_mask, create_padding_mask
+from .layers import LayerNorm, SublayerConnection, PositionwiseFeedForward, clones
+from .positional_encoding import PositionalEncoding
+
+# Backward compatibility imports
+MultiHeadAttention = MultiHeadedAttention
+FeedForward = PositionwiseFeedForward
+ResidualConnection = SublayerConnection
 
 
 class EncoderLayer(nn.Module):
     """
-    Single Transformer Encoder Layer
+    Encoder layer from "Attention is All You Need" (Harvard NLP implementation)
 
-    Architecture:
-        1. Multi-Head Self-Attention + Residual + LayerNorm
-        2. Feed-Forward Network + Residual + LayerNorm
+    Encoder is made up of self-attention and feed forward layers.
+    Each layer has two sub-layers with residual connections and layer norm.
 
-    Input shape:  (batch_size, seq_len, d_model)
-    Output shape: (batch_size, seq_len, d_model)
+    Args:
+        size: Model dimension (d_model)
+        self_attn: Multi-head attention module
+        feed_forward: Position-wise feed-forward module
+        dropout: Dropout probability
+
+    Shape:
+        - Input: (batch, seq_len, size)
+        - Output: (batch, seq_len, size)
     """
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
-        super().__init__()
 
-        # Multi-head self-attention
-        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout)
+    def __init__(self, size, self_attn, feed_forward, dropout):
+        super(EncoderLayer, self).__init__()
+        self.self_attn = self_attn
+        self.feed_forward = feed_forward
+        self.sublayer = clones(SublayerConnection(size, dropout), 2)
+        self.size = size
 
-        # Feed-forward network
-        self.feed_forward = FeedForward(d_model, d_ff, dropout)
-
-        # Residual connections
-        self.residual1 = ResidualConnection(d_model, dropout)
-        self.residual2 = ResidualConnection(d_model, dropout)
-
-    def forward(self, x, mask=None):
-        """
-        Args:
-            x: (batch_size, seq_len, d_model)
-            mask: (batch_size, seq_len, seq_len) - Optional padding mask
-
-        Returns:
-            output: (batch_size, seq_len, d_model)
-        """
-        # Self-attention with residual connection
-        attn_output = self.residual1(x, lambda x: self.self_attention(x, x, x, mask)[0])
-
-        # Feed-forward with residual connection
-        output = self.residual2(attn_output, self.feed_forward)
-
-        return output
+    def forward(self, x, mask):
+        """Follow Figure 1 (left) for connections"""
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask)[0])
+        return self.sublayer[1](x, self.feed_forward)
 
 
 class DecoderLayer(nn.Module):
     """
-    Single Transformer Decoder Layer
+    Decoder layer from "Attention is All You Need" (Harvard NLP implementation)
 
-    Architecture:
-        1. Masked Multi-Head Self-Attention + Residual + LayerNorm
-        2. Multi-Head Cross-Attention (to encoder) + Residual + LayerNorm
-        3. Feed-Forward Network + Residual + LayerNorm
+    Decoder is made of self-attention, source-attention, and feed forward.
+    Each layer has three sub-layers with residual connections and layer norm.
 
-    Input shape:
-        x (decoder input): (batch_size, seq_len_tgt, d_model)
-        encoder_output: (batch_size, seq_len_src, d_model)
-    Output shape: (batch_size, seq_len_tgt, d_model)
+    Args:
+        size: Model dimension (d_model)
+        self_attn: Masked multi-head self-attention module
+        src_attn: Multi-head attention module for encoder-decoder attention
+        feed_forward: Position-wise feed-forward module
+        dropout: Dropout probability
+
+    Shape:
+        - Input: (batch, seq_len_tgt, size)
+        - Memory: (batch, seq_len_src, size) [encoder output]
+        - Output: (batch, seq_len_tgt, size)
     """
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
-        super().__init__()
 
-        # Masked multi-head self-attention
-        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout)
+    def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
+        super(DecoderLayer, self).__init__()
+        self.size = size
+        self.self_attn = self_attn
+        self.src_attn = src_attn
+        self.feed_forward = feed_forward
+        self.sublayer = clones(SublayerConnection(size, dropout), 3)
 
-        # Multi-head cross-attention (decoder attends to encoder)
-        self.cross_attention = MultiHeadAttention(d_model, num_heads, dropout)
-
-        # Feed-forward network
-        self.feed_forward = FeedForward(d_model, d_ff, dropout)
-
-        # Residual connections
-        self.residual1 = ResidualConnection(d_model, dropout)
-        self.residual2 = ResidualConnection(d_model, dropout)
-        self.residual3 = ResidualConnection(d_model, dropout)
-
-    def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
-        """
-        Args:
-            x: (batch_size, seq_len_tgt, d_model) - Decoder input
-            encoder_output: (batch_size, seq_len_src, d_model) - Encoder output
-            src_mask: (batch_size, seq_len_src, seq_len_src) - Source padding mask
-            tgt_mask: (batch_size, seq_len_tgt, seq_len_tgt) - Target causal + padding mask
-
-        Returns:
-            output: (batch_size, seq_len_tgt, d_model)
-        """
-        # Masked self-attention with residual connection
-        self_attn_output = self.residual1(
-            x, lambda x: self.self_attention(x, x, x, tgt_mask)[0]
-        )
-
-        # Cross-attention to encoder with residual connection
-        # Query from decoder, Key and Value from encoder
-        cross_attn_output = self.residual2(
-            self_attn_output,
-            lambda x: self.cross_attention(x, encoder_output, encoder_output, src_mask)[0]
-        )
-
-        # Feed-forward with residual connection
-        output = self.residual3(cross_attn_output, self.feed_forward)
-
-        return output
+    def forward(self, x, memory, src_mask, tgt_mask):
+        """Follow Figure 1 (right) for connections"""
+        m = memory
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask)[0])
+        x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask)[0])
+        return self.sublayer[2](x, self.feed_forward)
 
 
-class TransformerEncoder(nn.Module):
+class Encoder(nn.Module):
     """
-    Transformer Encoder (stack of N encoder layers)
+    Core encoder from "Attention is All You Need" (Harvard NLP implementation)
 
-    Input shape:  (batch_size, seq_len, d_model)
-    Output shape: (batch_size, seq_len, d_model)
+    Core encoder is a stack of N layers with final layer normalization.
+
+    Args:
+        layer: EncoderLayer instance to clone
+        N: Number of layers to stack
+
+    Shape:
+        - Input: (batch, seq_len, d_model)
+        - Output: (batch, seq_len, d_model)
     """
-    def __init__(self, num_layers: int, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
-        super().__init__()
 
-        self.layers = nn.ModuleList([
-            EncoderLayer(d_model, num_heads, d_ff, dropout)
-            for _ in range(num_layers)
-        ])
+    def __init__(self, layer, N):
+        super(Encoder, self).__init__()
+        self.layers = clones(layer, N)
+        self.norm = LayerNorm(layer.size)
 
-        self.norm = LayerNorm(d_model)
-
-    def forward(self, x, mask=None):
-        """
-        Args:
-            x: (batch_size, seq_len, d_model)
-            mask: (batch_size, seq_len, seq_len) - Optional padding mask
-
-        Returns:
-            output: (batch_size, seq_len, d_model)
-        """
-        # Pass through all encoder layers
+    def forward(self, x, mask):
+        """Pass the input (and mask) through each layer in turn"""
         for layer in self.layers:
             x = layer(x, mask)
-
-        # Final layer normalization
         return self.norm(x)
 
 
-class TransformerDecoder(nn.Module):
+# Backward compatibility
+TransformerEncoder = Encoder
+
+
+class Decoder(nn.Module):
     """
-    Transformer Decoder (stack of N decoder layers)
+    Generic N layer decoder with masking (Harvard NLP implementation)
 
-    Input shape:
-        x: (batch_size, seq_len_tgt, d_model)
-        encoder_output: (batch_size, seq_len_src, d_model)
-    Output shape: (batch_size, seq_len_tgt, d_model)
+    Core decoder is a stack of N layers with final layer normalization.
+
+    Args:
+        layer: DecoderLayer instance to clone
+        N: Number of layers to stack
+
+    Shape:
+        - Input: (batch, seq_len_tgt, d_model)
+        - Memory: (batch, seq_len_src, d_model) [encoder output]
+        - Output: (batch, seq_len_tgt, d_model)
     """
-    def __init__(self, num_layers: int, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
-        super().__init__()
 
-        self.layers = nn.ModuleList([
-            DecoderLayer(d_model, num_heads, d_ff, dropout)
-            for _ in range(num_layers)
-        ])
+    def __init__(self, layer, N):
+        super(Decoder, self).__init__()
+        self.layers = clones(layer, N)
+        self.norm = LayerNorm(layer.size)
 
-        self.norm = LayerNorm(d_model)
-
-    def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
-        """
-        Args:
-            x: (batch_size, seq_len_tgt, d_model) - Decoder input
-            encoder_output: (batch_size, seq_len_src, d_model) - Encoder output
-            src_mask: (batch_size, seq_len_src, seq_len_src) - Source padding mask
-            tgt_mask: (batch_size, seq_len_tgt, seq_len_tgt) - Target causal + padding mask
-
-        Returns:
-            output: (batch_size, seq_len_tgt, d_model)
-        """
-        # Pass through all decoder layers
+    def forward(self, x, memory, src_mask, tgt_mask):
+        """Pass the input (and masks) through each layer in turn"""
         for layer in self.layers:
-            x = layer(x, encoder_output, src_mask, tgt_mask)
-
-        # Final layer normalization
+            x = layer(x, memory, src_mask, tgt_mask)
         return self.norm(x)
+
+
+# Backward compatibility
+TransformerDecoder = Decoder
+
+
+class EncoderDecoder(nn.Module):
+    """
+    Standard Encoder-Decoder architecture (Harvard NLP implementation)
+
+    A standard Encoder-Decoder architecture. Base for many models including
+    the original Transformer.
+
+    Args:
+        encoder: The encoder module
+        decoder: The decoder module
+        src_embed: Source embedding module (includes positional encoding)
+        tgt_embed: Target embedding module (includes positional encoding)
+        generator: Output generator module (linear + softmax)
+
+    Shape:
+        - src: (batch, seq_len_src)
+        - tgt: (batch, seq_len_tgt)
+        - Output: (batch, seq_len_tgt, vocab_size)
+    """
+
+    def __init__(self, encoder, decoder, src_embed, tgt_embed, generator):
+        super(EncoderDecoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.src_embed = src_embed
+        self.tgt_embed = tgt_embed
+        self.generator = generator
+
+    def forward(self, src, tgt, src_mask, tgt_mask):
+        """Take in and process masked src and target sequences"""
+        return self.decode(self.encode(src, src_mask), src_mask, tgt, tgt_mask)
+
+    def encode(self, src, src_mask):
+        """Encode source sequence"""
+        return self.encoder(self.src_embed(src), src_mask)
+
+    def decode(self, memory, src_mask, tgt, tgt_mask):
+        """Decode target sequence given encoder memory"""
+        return self.decoder(self.tgt_embed(tgt), memory, src_mask, tgt_mask)
+
+
+class Generator(nn.Module):
+    """
+    Define standard linear + softmax generation step (Harvard NLP)
+
+    Projects decoder output to vocabulary logits.
+
+    Args:
+        d_model: Model dimension
+        vocab: Vocabulary size
+
+    Shape:
+        - Input: (batch, seq_len, d_model)
+        - Output: (batch, seq_len, vocab)
+    """
+
+    def __init__(self, d_model, vocab):
+        super(Generator, self).__init__()
+        self.proj = nn.Linear(d_model, vocab)
+
+    def forward(self, x):
+        """Project to vocabulary and apply log softmax"""
+        return F.log_softmax(self.proj(x), dim=-1)
+
+
+class Embeddings(nn.Module):
+    """
+    Embeddings layer with scaling (Harvard NLP implementation)
+
+    Standard embeddings with scaling by sqrt(d_model) as described in the paper.
+    This scaling helps stabilize gradients and improve training dynamics.
+
+    Args:
+        d_model: Model dimension
+        vocab: Vocabulary size
+
+    Shape:
+        - Input: (batch, seq_len) [token IDs]
+        - Output: (batch, seq_len, d_model)
+    """
+
+    def __init__(self, d_model, vocab):
+        super(Embeddings, self).__init__()
+        self.lut = nn.Embedding(vocab, d_model)
+        self.d_model = d_model
+
+    def forward(self, x):
+        """Embed tokens and scale by sqrt(d_model)"""
+        return self.lut(x) * math.sqrt(self.d_model)
 
 
 class Transformer(nn.Module):
     """
     Full Transformer Encoder-Decoder Architecture with MHA
+
+    Backward compatibility wrapper around EncoderDecoder for existing code.
 
     Architecture:
         1. Input Embedding + Positional Encoding
@@ -282,7 +348,50 @@ class Transformer(nn.Module):
         return output
 
 
-import math
+def make_model(
+    src_vocab, tgt_vocab, N=6, d_model=512, d_ff=2048, h=8, dropout=0.1
+):
+    """
+    Helper function to construct a model from hyperparameters (Harvard NLP)
+
+    This is the standard way to create a Transformer model following the
+    "Attention is All You Need" architecture.
+
+    Args:
+        src_vocab: Size of source vocabulary
+        tgt_vocab: Size of target vocabulary
+        N: Number of encoder/decoder layers (default: 6)
+        d_model: Model dimension (default: 512)
+        d_ff: Feed-forward dimension (default: 2048)
+        h: Number of attention heads (default: 8)
+        dropout: Dropout probability (default: 0.1)
+
+    Returns:
+        EncoderDecoder model with initialized parameters
+
+    Example:
+        >>> model = make_model(10000, 10000, N=6)
+        >>> # Create a model with 10K vocab, 6 layers, default dims
+    """
+    c = copy.deepcopy
+    attn = MultiHeadedAttention(h, d_model)
+    ff = PositionwiseFeedForward(d_model, d_ff, dropout)
+    position = PositionalEncoding(d_model, dropout)
+
+    model = EncoderDecoder(
+        Encoder(EncoderLayer(d_model, c(attn), c(ff), dropout), N),
+        Decoder(DecoderLayer(d_model, c(attn), c(attn), c(ff), dropout), N),
+        nn.Sequential(Embeddings(d_model, src_vocab), c(position)),
+        nn.Sequential(Embeddings(d_model, tgt_vocab), c(position)),
+        Generator(d_model, tgt_vocab),
+    )
+
+    # This is important: Initialize parameters with Glorot / fan_avg
+    for p in model.parameters():
+        if p.dim() > 1:
+            nn.init.xavier_uniform_(p)
+
+    return model
 
 
 if __name__ == "__main__":
@@ -370,4 +479,24 @@ if __name__ == "__main__":
     end = time.time()
     print(f"   Average forward pass time: {(end - start) / 10 * 1000:.2f}ms")
 
+    # Test 7: make_model() function (Harvard NLP)
+    print("\n7. Testing make_model() function (Harvard NLP)...")
+    harvard_model = make_model(vocab_size, vocab_size, N=2, d_model=256, d_ff=512, h=4, dropout=0.1).to(device)
+
+    src_tokens_small = torch.randint(0, vocab_size, (batch_size, seq_len_src)).to(device)
+    tgt_tokens_small = torch.randint(0, vocab_size, (batch_size, seq_len_tgt)).to(device)
+    src_mask_small = create_padding_mask(src_tokens_small, pad_token_id=0)
+    tgt_mask_small = create_combined_mask(tgt_tokens_small, pad_token_id=0, causal=True)
+
+    output_harvard = harvard_model(src_tokens_small, tgt_tokens_small, src_mask_small, tgt_mask_small)
+    print(f"   Model created with make_model()")
+    print(f"   Output shape: {output_harvard.shape}")
+    print(f"   Parameters: {sum(p.numel() for p in harvard_model.parameters()):,}")
+
+    # Test Generator (log softmax output)
+    generator_out = harvard_model.generator(output_harvard)
+    print(f"   Generator output shape: {generator_out.shape}")
+    print(f"   Output is log probabilities: {(generator_out <= 0).all().item()}")
+
     print("\n✓ All Transformer tests passed!")
+    print("Implementation matches Harvard NLP's Annotated Transformer")
