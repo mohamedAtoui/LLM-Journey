@@ -137,17 +137,19 @@ class TextGenerator:
         for _ in range(max_length):
             # Get logits for last position
             if hasattr(self.model, 'src_embedding'):
+                # Transformer class (backward compatibility)
                 output = self.model(input_ids, input_ids)
                 logits = output[0, -1, :]
             else:
-                # EncoderDecoder style
+                # EncoderDecoder style (Harvard NLP)
                 src_mask = torch.ones(1, 1, input_ids.size(1)).to(self.device)
                 memory = self.model.encode(input_ids, src_mask)
                 out = self.model.decode(
                     memory, src_mask, input_ids,
                     subsequent_mask(input_ids.size(1)).type_as(input_ids)
                 )
-                logits = self.model.generator(out[:, -1])
+                # Generator returns [1, vocab], squeeze to [vocab]
+                logits = self.model.generator(out[:, -1]).squeeze(0)
 
             # Apply temperature
             logits = logits / temperature
@@ -156,11 +158,7 @@ class TextGenerator:
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
-            # Debug: Print shapes before concatenation
-            print(f"Shape of input_ids before concat: {input_ids.shape}")
-            print(f"Shape of next_token before concat: {next_token.shape}")
-
-            # Append to sequence (next_token is already [1], reshape to [1, 1])
+            # Append to sequence (reshape to [1, 1])
             input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
 
             # Stop if EOS
@@ -189,26 +187,25 @@ class TextGenerator:
         for _ in range(max_length):
             # Get logits
             if hasattr(self.model, 'src_embedding'):
+                # Transformer class (backward compatibility)
                 output = self.model(input_ids, input_ids)
                 logits = output[0, -1, :]
             else:
+                # EncoderDecoder style (Harvard NLP)
                 src_mask = torch.ones(1, 1, input_ids.size(1)).to(self.device)
                 memory = self.model.encode(input_ids, src_mask)
                 out = self.model.decode(
                     memory, src_mask, input_ids,
                     subsequent_mask(input_ids.size(1)).type_as(input_ids)
                 )
-                logits = self.model.generator(out[:, -1])
+                # Generator returns [1, vocab], squeeze to [vocab]
+                logits = self.model.generator(out[:, -1]).squeeze(0)
 
             # Filter to top-k
             top_k_logits, top_k_indices = torch.topk(logits, k)
             probs = F.softmax(top_k_logits, dim=-1)
             next_token_idx = torch.multinomial(probs, num_samples=1)
             next_token = top_k_indices[next_token_idx]
-
-            # Debug: Print shapes before concatenation
-            print(f"Shape of input_ids before concat: {input_ids.shape}")
-            print(f"Shape of next_token before concat: {next_token.shape}")
 
             # Append to sequence (reshape to [1, 1])
             input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
@@ -240,16 +237,19 @@ class TextGenerator:
         for _ in range(max_length):
             # Get logits
             if hasattr(self.model, 'src_embedding'):
+                # Transformer class (backward compatibility)
                 output = self.model(input_ids, input_ids)
                 logits = output[0, -1, :]
             else:
+                # EncoderDecoder style (Harvard NLP)
                 src_mask = torch.ones(1, 1, input_ids.size(1)).to(self.device)
                 memory = self.model.encode(input_ids, src_mask)
                 out = self.model.decode(
                     memory, src_mask, input_ids,
                     subsequent_mask(input_ids.size(1)).type_as(input_ids)
                 )
-                logits = self.model.generator(out[:, -1])
+                # Generator returns [1, vocab], squeeze to [vocab]
+                logits = self.model.generator(out[:, -1]).squeeze(0)
 
             # Sort by probability
             sorted_logits, sorted_indices = torch.sort(logits, descending=True)
@@ -267,10 +267,6 @@ class TextGenerator:
             # Sample
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
-
-            # Debug: Print shapes before concatenation
-            print(f"Shape of input_ids before concat: {input_ids.shape}")
-            print(f"Shape of next_token before concat: {next_token.shape}")
 
             # Append to sequence (reshape to [1, 1])
             input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
