@@ -40,7 +40,7 @@ This implementation is based on the excellent [Annotated Transformer](https://nl
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/LLM-Journey.git
+git clone https://github.com/attaimen/LLM-Journey.git
 cd LLM-Journey
 
 # Install in editable mode

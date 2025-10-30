@@ -13,14 +13,14 @@ import argparse
 from tqdm import tqdm
 import math
 
-# Import local modules
-from transformer import Transformer
-from data_loader import WikiTextDataModule, load_config
-from utils import (
+# Import local modules (using explicit relative imports)
+from .transformer import Transformer
+from .data_loader import WikiTextDataModule, load_config
+from .utils import (
     MetricsTracker, Logger, CheckpointManager, LabelSmoothing,
     set_seed, count_parameters
 )
-from attention import create_combined_mask, create_padding_mask
+from .attention import create_combined_mask, create_padding_mask
 
 
 class Trainer:

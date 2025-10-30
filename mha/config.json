@@ -33,7 +33,7 @@
   "data_config": {
     "dataset": "wikitext2",
     "train_path": "../data_processed/wikitext2_processed/train",
-    "val_path": "../data_processed/wikitext2_processed/val",
+    "val_path": "../data_processed/wikitext2_processed/validation",
     "tokenizer": "gpt2"
   },
 

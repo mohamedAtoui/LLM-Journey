@@ -19,7 +19,7 @@ import copy
 
 from .attention import MultiHeadedAttention, create_combined_mask, create_padding_mask
 from .layers import LayerNorm, SublayerConnection, PositionwiseFeedForward, clones
-from .positional_encoding import PositionalEncoding
+from .positional_encoding import PositionalEncoding, PositionalEncodingFactory
 
 # Backward compatibility imports
 MultiHeadAttention = MultiHeadedAttention
@@ -293,13 +293,17 @@ class Transformer(nn.Module):
             pe_type, d_model, max_seq_length, dropout
         )
 
-        # Encoder and Decoder
-        self.encoder = TransformerEncoder(
-            num_encoder_layers, d_model, num_heads, d_ff, dropout
-        )
-        self.decoder = TransformerDecoder(
-            num_decoder_layers, d_model, num_heads, d_ff, dropout
-        )
+        # Encoder and Decoder (Harvard NLP pattern)
+        c = copy.deepcopy
+        attn = MultiHeadedAttention(num_heads, d_model, dropout)
+        ff = PositionwiseFeedForward(d_model, d_ff, dropout)
+
+        # Create encoder and decoder using proper Harvard NLP construction
+        encoder_layer = EncoderLayer(d_model, c(attn), c(ff), dropout)
+        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers)
+
+        decoder_layer = DecoderLayer(d_model, c(attn), c(attn), c(ff), dropout)
+        self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers)
 
         # Output projection to vocabulary
         self.output_projection = nn.Linear(d_model, vocab_size)

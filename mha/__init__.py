@@ -24,7 +24,7 @@ Example usage (backward compatible):
 """
 
 __version__ = "1.0.0"
-__author__ = "Your Name"
+__author__ = "LLM-Journey Contributors"
 
 # Harvard NLP Transformer Components
 from .transformer import (
@@ -86,7 +86,6 @@ from .utils import (
     # Harvard NLP
     rate,
     Batch,
-    subsequent_mask,
     # Other utilities
     MetricsTracker,
     LabelSmoothing,
