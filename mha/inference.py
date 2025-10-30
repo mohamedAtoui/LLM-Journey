@@ -156,8 +156,8 @@ class TextGenerator:
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
-            # Append to sequence
-            input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
+            # Append to sequence (next_token is already [1], reshape to [1, 1])
+            input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
 
             # Stop if EOS
             if next_token.item() == self.tokenizer.eos_token_id:
@@ -202,8 +202,8 @@ class TextGenerator:
             next_token_idx = torch.multinomial(probs, num_samples=1)
             next_token = top_k_indices[next_token_idx]
 
-            # Append to sequence
-            input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
+            # Append to sequence (reshape to [1, 1])
+            input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
 
             # Stop if EOS
             if next_token.item() == self.tokenizer.eos_token_id:
@@ -260,8 +260,8 @@ class TextGenerator:
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
-            # Append to sequence
-            input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
+            # Append to sequence (reshape to [1, 1])
+            input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
 
             # Stop if EOS
             if next_token.item() == self.tokenizer.eos_token_id:
