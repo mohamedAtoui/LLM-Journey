@@ -156,6 +156,10 @@ class TextGenerator:
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
+            # Debug: Print shapes before concatenation
+            print(f"Shape of input_ids before concat: {input_ids.shape}")
+            print(f"Shape of next_token before concat: {next_token.shape}")
+
             # Append to sequence (next_token is already [1], reshape to [1, 1])
             input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
 
@@ -201,6 +205,10 @@ class TextGenerator:
             probs = F.softmax(top_k_logits, dim=-1)
             next_token_idx = torch.multinomial(probs, num_samples=1)
             next_token = top_k_indices[next_token_idx]
+
+            # Debug: Print shapes before concatenation
+            print(f"Shape of input_ids before concat: {input_ids.shape}")
+            print(f"Shape of next_token before concat: {next_token.shape}")
 
             # Append to sequence (reshape to [1, 1])
             input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
@@ -259,6 +267,10 @@ class TextGenerator:
             # Sample
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
+
+            # Debug: Print shapes before concatenation
+            print(f"Shape of input_ids before concat: {input_ids.shape}")
+            print(f"Shape of next_token before concat: {next_token.shape}")
 
             # Append to sequence (reshape to [1, 1])
             input_ids = torch.cat([input_ids, next_token.view(1, 1)], dim=1)
